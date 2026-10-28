@@ -1,4 +1,5 @@
 import { db } from "../db/client.js";
+import { decodeCursor, encodeCursor } from "../utils/pagination.js";
 
 export interface DeliveryReceipt {
   id: string;
@@ -76,6 +77,13 @@ export async function createDeliveryReceipt(input: CreateDeliveryReceiptInput): 
   return mapRow(result.rows[0] as Record<string, unknown>);
 }
 
+export class MalformedCursorError extends Error {
+  constructor() {
+    super("Malformed pagination cursor");
+    this.name = "MalformedCursorError";
+  }
+}
+
 export async function queryDeliveryReceipts(query: DeliveryReceiptQuery): Promise<{ data: DeliveryReceipt[]; nextCursor?: string }> {
   const conditions: string[] = [];
   const params: (string | number)[] = [];
@@ -94,16 +102,33 @@ export async function queryDeliveryReceipts(query: DeliveryReceiptQuery): Promis
     params.push(query.subscriptionId);
   }
 
+  // Decode cursor and add keyset condition when present.
+  // A non-empty but malformed cursor is a caller error — propagate it.
+  if (query.cursor !== undefined && query.cursor !== "") {
+    const decoded = decodeCursor(query.cursor);
+    if (decoded === null) {
+      throw new MalformedCursorError();
+    }
+    conditions.push(`(created_at, id) < ($${paramIndex++}, $${paramIndex++})`);
+    params.push(decoded.value, decoded.id);
+  }
+
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const limit = Math.min(query.limit ?? 50, 100);
 
   const result = await db.query(
-    `SELECT * FROM delivery_receipts ${where} ORDER BY created_at DESC LIMIT $${paramIndex++}`,
+    `SELECT * FROM delivery_receipts ${where} ORDER BY created_at DESC, id DESC LIMIT $${paramIndex++}`,
     [...params, limit],
   );
 
   const receipts = (result.rows as Record<string, unknown>[]).map(mapRow);
-  const nextCursor = receipts.length === limit ? receipts[receipts.length - 1].id : undefined;
+
+  // Only emit a nextCursor when the page is full (there may be more rows).
+  let nextCursor: string | undefined;
+  if (receipts.length === limit) {
+    const last = receipts[receipts.length - 1];
+    nextCursor = encodeCursor({ value: last.createdAt, id: last.id });
+  }
 
   return { data: receipts, nextCursor };
 }

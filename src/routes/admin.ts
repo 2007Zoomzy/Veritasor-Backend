@@ -19,7 +19,7 @@ import {
   listDeadLetterShards,
 } from '../services/webhooks/deadLetterQueue.js'
 import { handleRazorpayEvent } from '../services/webhooks/razorpayHandler.js'
-import { queryDeliveryReceipts } from '../repositories/deliveryReceiptRepository.js'
+import { queryDeliveryReceipts, MalformedCursorError } from '../repositories/deliveryReceiptRepository.js'
 import { revokeBatchAttestations } from '../services/attestation/revokeBatch.js'
 import { createRolePromotionRequest, findRolePromotionRequestById, updateRolePromotionRequest, findPendingRolePromotionRequestsForTarget } from '../repositories/rolePromotionRequestRepository.js'
 
@@ -581,11 +581,15 @@ adminRouter.get(
       const businessId = typeof req.query.businessId === 'string' ? req.query.businessId : undefined;
       const deliveryId = typeof req.query.deliveryId === 'string' ? req.query.deliveryId : undefined;
       const subscriptionId = typeof req.query.subscriptionId === 'string' ? req.query.subscriptionId : undefined;
+      const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
       const limit = typeof req.query.limit === 'string' ? Math.min(parseInt(req.query.limit, 10) || 50, 100) : 50;
 
-      const result = await queryDeliveryReceipts({ businessId, deliveryId, subscriptionId, limit });
+      const result = await queryDeliveryReceipts({ businessId, deliveryId, subscriptionId, cursor, limit });
       res.json(result);
     } catch (error: any) {
+      if (error instanceof MalformedCursorError) {
+        return res.status(400).json({ error: 'Bad Request', message: 'Invalid cursor' });
+      }
       res.status(500).json({ error: 'Internal Server Error', message: error.message });
     }
   }
